@@ -1,8 +1,13 @@
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <cstring>
 #include <map>
 #include <limits>
+#include <string>
+#include <iomanip>
+#include <cerrno>
+#include <string>
 
 #include <limits.h>
 #include <unistd.h>
@@ -21,6 +26,51 @@ using std::endl;
 
 pid_t pid;
 
+
+std::string strlen_long(long num) {
+    std::ostringstream oss;
+    std::string str;
+    size_t len = std::to_string(num).length();
+    
+    // Convert length to a 4-character string
+    oss << std::setw(4) << std::setfill('0') << len;
+    str = oss.str();
+    
+    return str;
+}
+
+std::string strlen_string(const std::string& str) {
+    // Get the size of the string
+    size_t size = str.size();
+    
+    // Convert the size to a 4-character string with leading zeros
+    std::ostringstream oss;
+    oss << std::setw(4) << std::setfill('0') << size;
+    
+    return oss.str();
+}
+
+std::string get_raw_string(const std::string& input) {
+    std::string raw_string;
+    for (char c : input) {
+        switch (c) {
+            case '\n':
+                raw_string += "\\n";
+                break;
+            case '\r':
+                raw_string += "\\r";
+                break;
+            case '\t':
+                raw_string += "\\t";
+                break;
+            default:
+                raw_string += c;
+                break;
+        }
+    }
+    return raw_string;
+}
+
 void flush_stdin() {
     cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
 }
@@ -28,27 +78,30 @@ void flush_stdin() {
 // Define a function to read a string from memory
 std::string read_string_from_memory(unsigned long address) {
     std::string str;
-    long word;
-    char* char_ptr = reinterpret_cast<char*>(&word);
+    char buffer[sizeof(long)];
+    int bytesRead = 0;
+
     while (true) {
         // Read a word of memory from the traced process
         errno = 0;
-        word = ptrace(PTRACE_PEEKDATA, pid, address, nullptr);
+        long word = ptrace(PTRACE_PEEKDATA, pid, address + bytesRead, nullptr);
         if (word == -1 && errno) {
             perror("ptrace peekdata");
             break;
         }
 
-        // Copy bytes from the word into the string
+        // Copy bytes from the word into the buffer
+        memcpy(buffer, &word, sizeof(long));
+
+        // Process each byte in the buffer
         for (size_t i = 0; i < sizeof(long); ++i) {
-            if (char_ptr[i] == '\0') {
+            if (buffer[i] == '\0') {
                 return str;
             }
-            str.push_back(char_ptr[i]);
+            str.push_back(buffer[i]);
         }
 
-        // Advance the address to the next word
-        address += sizeof(long);
+        bytesRead += sizeof(long);
     }
     return str;
 }
@@ -149,7 +202,7 @@ public:
 
     void modify_args() {
         for (int i = 0; i < num_args; i++) {
-            cout << "I:ENTR_NEW_ARG:" << i << ":" << endl;
+            cout << "SETARG" << i << endl;
             long new_arg_value;
             if (is_arg_string_address(syscall_NR, i)) {
                 std::string str;
@@ -161,11 +214,10 @@ public:
             }
             set_arg(i, new_arg_value);
         }
-        cout << "O:NEW_ARGS_MOD:1" << endl;
     }
 
     void modify_ret() {
-        cout << "I:ENTR_NEW_RET:" << endl;
+        cout << "SETRET" << endl;
         long new_ret;
         cin >> new_ret;
         set_ret(new_ret);
@@ -173,7 +225,7 @@ public:
 
     void output_syscall_name(char type) {
         std::string syscall_name = get_syscall_name_by_NR(syscall_NR);
-        cout << "O:" << type << ":SYSCALL_NAME:" << num_args << ":" << syscall_name << endl;
+        cout << type << num_args << syscall_name << endl;
     }
 
     void output_args() {
@@ -181,19 +233,20 @@ public:
         for (int i = 0; i < num_args; i++) {
             if (is_arg_string_address(syscall_NR, i)) {
                 std::string str_ver = read_string_from_memory(args[i]);
-                cout << "O:SYSCALL_ARGS:" << i << ":1:" << str_ver << endl;
+                str_ver = get_raw_string(str_ver);
+                cout << "ARG" << i << "1" << strlen_string(str_ver) << str_ver << endl;
             } else {
-                cout << "O:SYSCALL_ARGS:" << i << ":0:" << args[i] << endl;
+                cout << "ARG" << i << "0" << strlen_long(args[i]) << args[i] << endl;
             }
         }
     }
 
     void output_ret() {
-        cout << "O:SYSCALL_RETV:" << get_ret() << endl;
+        cout << "RET" << get_ret() << endl;
     }
 
     bool output_skip_prompt() {
-        cout << "I:SYSCALL_SKIP:" << endl;
+        cout << "SKIP" << endl;
         int response;
         cin >> response;
         return response == 0;
